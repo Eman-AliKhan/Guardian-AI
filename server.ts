@@ -10,6 +10,7 @@ import { createServer as createViteServer } from 'vite';
 import { createInitialGuardianState } from './src/data/pakistanSeed.ts';
 import type {
   AIAnalysisResult,
+  AgencyForumPost,
   AuditLogEntry,
   CommunityReport,
   EmergencyAgency,
@@ -27,7 +28,6 @@ const PORT = 3000;
 const STORE_DIR = path.resolve(process.cwd(), 'data');
 const STORE_FILE = path.join(STORE_DIR, 'guardian-store.json');
 
-// Server-side Gemini client
 const ai = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -44,7 +44,13 @@ function loadState(): GuardianStateSnapshot {
     if (fs.existsSync(STORE_FILE)) {
       const raw = fs.readFileSync(STORE_FILE, 'utf-8');
       const parsed = JSON.parse(raw) as GuardianStateSnapshot;
-      if (parsed && Array.isArray(parsed.incidents) && Array.isArray(parsed.stations)) {
+      if (
+        parsed &&
+        Array.isArray(parsed.incidents) &&
+        Array.isArray(parsed.stations) &&
+        Array.isArray(parsed.agencyForumPosts) &&
+        typeof parsed.citizenProfile?.fullAddress === 'string'
+      ) {
         return parsed;
       }
     }
@@ -128,19 +134,68 @@ function inferPriorityFromTrigger(trigger: IncidentTrigger): IncidentPriority {
   return 'moderate';
 }
 
-function findNearestStations(lat: number, lng: number, agency: EmergencyAgency): {
+function rankStationsHierarchical(
+  lat: number,
+  lng: number,
+  city: string,
+  area: string,
+  street: string,
+  agency: EmergencyAgency
+): {
   station: EmergencyStation;
   distanceKm: number;
+  proximityTier: 'same_street' | 'same_area' | 'same_city' | 'regional';
+  score: number;
 }[] {
   const targetAgencies: ('police' | 'hospital' | 'fire')[] =
     agency === 'multi' ? ['police', 'hospital', 'fire'] : [agency];
 
-  const results: { station: EmergencyStation; distanceKm: number }[] = [];
+  const normCity = (city || '').trim().toLowerCase();
+  const normArea = (area || '').trim().toLowerCase();
+  const normStreet = (street || '').trim().toLowerCase();
+
+  const results: {
+    station: EmergencyStation;
+    distanceKm: number;
+    proximityTier: 'same_street' | 'same_area' | 'same_city' | 'regional';
+    score: number;
+  }[] = [];
+
   for (const ag of targetAgencies) {
     const candidates = state.stations
       .filter((s) => s.agency === ag)
-      .map((s) => ({ station: s, distanceKm: Number(haversineKm({ lat, lng }, s).toFixed(2)) }))
-      .sort((a, b) => a.distanceKm - b.distanceKm);
+      .map((s) => {
+        const distanceKm = Number(haversineKm({ lat, lng }, s).toFixed(2));
+        const sameCity = s.city.toLowerCase() === normCity;
+        const sameArea = sameCity && normArea.length > 1 && s.area.toLowerCase().includes(normArea);
+        const sameStreet =
+          sameArea &&
+          normStreet.length > 2 &&
+          (s.street.toLowerCase().includes(normStreet) || normStreet.includes(s.street.toLowerCase()));
+
+        let proximityTier: 'same_street' | 'same_area' | 'same_city' | 'regional' = 'regional';
+        if (sameStreet || (sameCity && distanceKm <= 1.0)) proximityTier = 'same_street';
+        else if (sameArea || (sameCity && distanceKm <= 3.5)) proximityTier = 'same_area';
+        else if (sameCity) proximityTier = 'same_city';
+
+        const tierWeight =
+          proximityTier === 'same_street'
+            ? 0
+            : proximityTier === 'same_area'
+              ? 100
+              : proximityTier === 'same_city'
+                ? 200
+                : 500;
+        const availabilityPenalty = s.availableUnits > 0 ? 0 : 1000;
+        return {
+          station: s,
+          distanceKm,
+          proximityTier,
+          score: tierWeight + availabilityPenalty + distanceKm,
+        };
+      })
+      .sort((a, b) => a.score - b.score);
+
     if (candidates.length > 0) {
       results.push(candidates[0]);
     }
@@ -163,6 +218,36 @@ function addAudit(actor: string, role: string, action: string, targetId: string,
     state.auditLogs = state.auditLogs.slice(0, 100);
   }
   return entry;
+}
+
+function pushForumDispatchPost(
+  station: EmergencyStation,
+  distanceKm: number,
+  proximityTier: string,
+  message: string,
+  opts: { incidentId?: string; reportId?: string }
+): AgencyForumPost {
+  const post: AgencyForumPost = {
+    id: `fp-${Date.now()}-${Math.floor(Math.random() * 999)}`,
+    agency: station.agency,
+    stationId: station.id,
+    stationName: station.name,
+    city: station.city,
+    area: station.area,
+    street: station.street,
+    incidentId: opts.incidentId,
+    reportId: opts.reportId,
+    author: 'GuardAI Dispatch Core',
+    role: `${proximityTier.replace('_', ' ')} (${distanceKm} km)`,
+    message,
+    statusTag: 'alerted',
+    createdAt: new Date().toISOString(),
+  };
+  state.agencyForumPosts.unshift(post);
+  if (state.agencyForumPosts.length > 120) {
+    state.agencyForumPosts = state.agencyForumPosts.slice(0, 120);
+  }
+  return post;
 }
 
 async function startServer() {
@@ -223,7 +308,20 @@ async function startServer() {
     res.json(state);
   });
 
-  // Simulated Phone OTP Send & Verify (Pakistan +92 format)
+  // Hierarchical City -> Area -> Street Station Availability Lookup
+  app.get('/api/stations/nearby', (req, res) => {
+    const city = String(req.query.city || state.citizenProfile.city || 'Lahore');
+    const area = String(req.query.area || state.citizenProfile.area || '');
+    const street = String(req.query.street || state.citizenProfile.street || '');
+    const lat = Number(req.query.lat || 31.5204);
+    const lng = Number(req.query.lng || 74.3587);
+
+    const ranked = (['police', 'hospital', 'fire'] as const).flatMap((ag) =>
+      rankStationsHierarchical(lat, lng, city, area, street, ag)
+    );
+    res.json(ranked);
+  });
+
   const pendingOtps = new Map<string, string>();
 
   app.post('/api/auth/otp/send', (req, res) => {
@@ -257,7 +355,13 @@ async function startServer() {
     if (name && name.trim()) state.citizenProfile.name = name.trim();
     if (city && city.trim()) state.citizenProfile.city = city.trim();
     state.citizenProfile.verified = true;
-    addAudit(state.citizenProfile.name, 'Citizen', 'OTP_VERIFIED', state.citizenProfile.id, `Phone verified (${state.citizenProfile.phone})`);
+    addAudit(
+      state.citizenProfile.name,
+      'Citizen',
+      'OTP_VERIFIED',
+      state.citizenProfile.id,
+      `Phone verified (${state.citizenProfile.phone})`
+    );
     saveState(state);
     broadcast('state:sync', state);
     res.json({ verified: true, citizenProfile: state.citizenProfile });
@@ -271,13 +375,16 @@ async function startServer() {
     res.json(state.citizenProfile);
   });
 
-  // Create Incident (SOS, Audio 3-check escalation, Journey Alert, Assault/Household/Fire/Medical report, Offline Flush)
+  // Create Incident with full Address (City/Area/Street), Phone, Profile & Auto-Posted Forum Dispatch
   app.post('/api/incidents', (req, res) => {
     const {
       trigger = 'sos_button',
       silentMode = false,
       location,
       city,
+      area,
+      street,
+      fullAddress,
       areaLabel,
       transcriptOrAudioNote,
       agencyOverride,
@@ -288,12 +395,23 @@ async function startServer() {
       silentMode?: boolean;
       location?: LatLng;
       city?: string;
+      area?: string;
+      street?: string;
+      fullAddress?: string;
       areaLabel?: string;
       transcriptOrAudioNote?: string;
       agencyOverride?: EmergencyAgency;
       deliveryChannel?: 'live_ws' | 'offline_sync' | 'sms_fallback';
       batteryPercent?: number;
     };
+
+    const resolvedCity = city || state.citizenProfile.city || 'Lahore';
+    const resolvedArea = area || state.citizenProfile.area || 'Gulberg III';
+    const resolvedStreet = street || state.citizenProfile.street || 'Main Boulevard';
+    const resolvedAddress =
+      fullAddress ||
+      state.citizenProfile.fullAddress ||
+      `${resolvedStreet}, ${resolvedArea}, ${resolvedCity}`;
 
     const loc: LatLng = {
       lat: location?.lat ?? 31.5204,
@@ -304,29 +422,39 @@ async function startServer() {
 
     const agency = agencyOverride || inferAgencyFromTrigger(trigger, transcriptOrAudioNote);
     const priority = inferPriorityFromTrigger(trigger);
-    const nearestStations = findNearestStations(loc.lat, loc.lng, agency);
+    const nearestStations = rankStationsHierarchical(
+      loc.lat,
+      loc.lng,
+      resolvedCity,
+      resolvedArea,
+      resolvedStreet,
+      agency
+    );
 
-    const regionalDispatches: RegionalDispatchNotice[] = nearestStations.map(({ station, distanceKm }) => ({
-      stationId: station.id,
-      stationName: station.name,
-      agency: station.agency,
-      distanceKm,
-      notifiedAt: new Date().toISOString(),
-      sharedFields: [
-        'GPS Coordinates & Accuracy',
-        `Emergency Category (${agency.toUpperCase()})`,
-        'Incident Priority & Silent Flag',
-        ...(state.citizenProfile.shareMedicalOnSos && agency === 'hospital'
-          ? ['Consented Medical Notes (Blood/Allergies)']
-          : []),
-      ],
-      withheldFields: [
-        'Full Contact Directory',
-        'Account OTP & Session History',
-        'Unrelated Personal Profile Data',
-      ],
-      acknowledgement: 'notified',
-    }));
+    const regionalDispatches: RegionalDispatchNotice[] = nearestStations.map(
+      ({ station, distanceKm, proximityTier }) => ({
+        stationId: station.id,
+        stationName: station.name,
+        agency: station.agency,
+        city: station.city,
+        area: station.area,
+        street: station.street,
+        distanceKm,
+        proximityTier,
+        notifiedAt: new Date().toISOString(),
+        sharedFields: [
+          `Address (${resolvedAddress})`,
+          `Phone (${state.citizenProfile.phone})`,
+          `GPS (${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)})`,
+          `Emergency Category (${agency.toUpperCase()})`,
+          ...(state.citizenProfile.shareMedicalOnSos && state.citizenProfile.bloodGroup
+            ? [`Medical (${state.citizenProfile.bloodGroup})`]
+            : []),
+        ],
+        withheldFields: ['Account OTP & Session History', 'Unrelated Media Archive'],
+        acknowledgement: 'notified',
+      })
+    );
 
     const nowIso = new Date().toISOString();
     const id = `INC-2026-${Math.floor(404 + Math.random() * 590)}`;
@@ -344,8 +472,11 @@ async function startServer() {
       citizenId: state.citizenProfile.id,
       citizenName: state.citizenProfile.name,
       citizenPhone: state.citizenProfile.phone,
-      city: city || state.citizenProfile.city || 'Lahore',
-      areaLabel: areaLabel || `${city || state.citizenProfile.city} Active Corridor`,
+      citizenAddress: resolvedAddress,
+      city: resolvedCity,
+      area: resolvedArea,
+      street: resolvedStreet,
+      areaLabel: areaLabel || `${resolvedStreet}, ${resolvedArea}`,
       trigger,
       status: 'created',
       priority,
@@ -358,6 +489,11 @@ async function startServer() {
       batteryAtTrigger: batteryPercent ?? state.citizenProfile.batteryPercent,
       transcriptOrAudioNote,
       medicalSummaryShared: medicalSummary,
+      trustedContactsSummary: state.citizenProfile.contacts.map((c) => ({
+        name: c.name,
+        phone: c.phone,
+        relation: c.relation,
+      })),
       escalatedToSupervisor: priority === 'critical',
       regionalDispatches,
       trustedContactAcks: [],
@@ -368,21 +504,41 @@ async function startServer() {
 
     state.incidents.unshift(incident);
 
-    const stationSummary = regionalDispatches.map((d) => `${d.stationName} (${d.distanceKm} km)`).join(', ');
+    // Post automatically to connected Police / Hospital / Fire Forums
+    const forumPosts: AgencyForumPost[] = [];
+    for (const match of nearestStations) {
+      const post = pushForumDispatchPost(
+        match.station,
+        match.distanceKm,
+        match.proximityTier,
+        `[${incident.id}] ${trigger.replace(/_/g, ' ').toUpperCase()} — Citizen: ${
+          incident.citizenName
+        } (${incident.citizenPhone}) · Address: ${incident.citizenAddress}. ${
+          transcriptOrAudioNote || 'Immediate assistance requested.'
+        }`,
+        { incidentId: incident.id }
+      );
+      forumPosts.push(post);
+    }
+
+    const stationSummary = regionalDispatches
+      .map((d) => `${d.stationName} [${d.proximityTier.replace('_', ' ')} · ${d.distanceKm} km]`)
+      .join(', ');
     const audit = addAudit(
-      'Guardian Dispatch Core',
+      'GuardAI Dispatch Core',
       'System',
       'INCIDENT_CREATED',
       incident.id,
-      `Trigger: ${trigger}. Privacy-minimized dispatch routed to: ${stationSummary || 'Control Room'}.`
+      `Trigger: ${trigger}. Citizen ${incident.citizenName} (${incident.citizenPhone}) at ${incident.citizenAddress}. Routed to: ${
+        stationSummary || 'Control Room'
+      }.`
     );
 
     saveState(state);
-    broadcast('incident:created', { incident, audit });
+    broadcast('incident:created', { incident, audit, forumPosts });
     res.status(201).json(incident);
   });
 
-  // Update Incident Status / Assign Responder / Escalate / Add Note / Notify Station
   app.patch('/api/incidents/:id', (req, res) => {
     const { id } = req.params;
     const {
@@ -406,11 +562,10 @@ async function startServer() {
     };
 
     const incident = state.incidents.find((i) => i.id === id);
-    if (!incident) {
-      return res.status(404).json({ error: 'Incident not found' });
-    }
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
 
     const actionsTaken: string[] = [];
+    const createdForumPosts: AgencyForumPost[] = [];
 
     if (status && status !== incident.status) {
       incident.status = status;
@@ -431,7 +586,6 @@ async function startServer() {
     }
 
     if (assignedResponderId) {
-      // Release previous responder if reassigned
       if (incident.assignedResponderId && incident.assignedResponderId !== assignedResponderId) {
         const prev = state.responders.find((r) => r.id === incident.assignedResponderId);
         if (prev) {
@@ -457,24 +611,44 @@ async function startServer() {
     }
 
     if (notifyAgency) {
-      const nearest = findNearestStations(incident.location.lat, incident.location.lng, notifyAgency);
-      for (const { station, distanceKm } of nearest) {
+      const nearest = rankStationsHierarchical(
+        incident.location.lat,
+        incident.location.lng,
+        incident.city,
+        incident.area,
+        incident.street,
+        notifyAgency
+      );
+      for (const { station, distanceKm, proximityTier } of nearest) {
         const already = incident.regionalDispatches.find((d) => d.stationId === station.id);
         if (!already) {
           incident.regionalDispatches.push({
             stationId: station.id,
             stationName: station.name,
             agency: station.agency,
+            city: station.city,
+            area: station.area,
+            street: station.street,
             distanceKm,
+            proximityTier,
             notifiedAt: new Date().toISOString(),
             sharedFields: [
+              `Address (${incident.citizenAddress})`,
+              `Phone (${incident.citizenPhone})`,
               'Live GPS Coordinates',
               `Emergency Category (${notifyAgency.toUpperCase()})`,
-              'Incident Priority',
             ],
-            withheldFields: ['Full Contact List', 'Private Media Archive', 'Account History'],
+            withheldFields: ['Account OTP History', 'Unrelated Media Archive'],
             acknowledgement: 'dispatched',
           });
+          const post = pushForumDispatchPost(
+            station,
+            distanceKm,
+            proximityTier,
+            `[${incident.id}] GuardAI Escalation to ${station.name}: ${incident.citizenName} (${incident.citizenPhone}) at ${incident.citizenAddress}. Please confirm unit dispatch.`,
+            { incidentId: incident.id }
+          );
+          createdForumPosts.push(post);
           actionsTaken.push(`Notified ${station.name}`);
         }
       }
@@ -502,11 +676,15 @@ async function startServer() {
     );
 
     saveState(state);
-    broadcast('incident:updated', { incident, responders: state.responders, audit });
+    broadcast('incident:updated', {
+      incident,
+      responders: state.responders,
+      audit,
+      forumPosts: createdForumPosts,
+    });
     res.json(incident);
   });
 
-  // Live Location Ping
   app.post('/api/incidents/:id/location', (req, res) => {
     const { id } = req.params;
     const { lat, lng, accuracyMeters = 8, batteryPercent } = req.body as {
@@ -531,11 +709,14 @@ async function startServer() {
     }
     incident.updatedAt = point.timestamp!;
     saveState(state);
-    broadcast('incident:location', { incidentId: id, location: point, batteryAtTrigger: incident.batteryAtTrigger });
+    broadcast('incident:location', {
+      incidentId: id,
+      location: point,
+      batteryAtTrigger: incident.batteryAtTrigger,
+    });
     res.json(incident);
   });
 
-  // Upload Consent-Based Geotagged Evidence
   app.post('/api/incidents/:id/evidence', (req, res) => {
     const { id } = req.params;
     const { type = 'audio', durationSec = 15, summaryNote } = req.body as {
@@ -580,7 +761,6 @@ async function startServer() {
     res.status(201).json(record);
   });
 
-  // Trusted Contact Acknowledge Alert
   app.post('/api/incidents/:id/contact-ack', (req, res) => {
     const { id } = req.params;
     const { contactId, contactName } = req.body as { contactId: string; contactName: string };
@@ -594,51 +774,116 @@ async function startServer() {
         ackAt: new Date().toISOString(),
       });
     }
-    const audit = addAudit(contactName, 'Trusted Contact', 'ALERT_ACKNOWLEDGED', incident.id, 'Family circle member acknowledged alert status');
+    const audit = addAudit(
+      contactName,
+      'Trusted Contact',
+      'ALERT_ACKNOWLEDGED',
+      incident.id,
+      'Family circle member acknowledged alert status'
+    );
     saveState(state);
     broadcast('incident:updated', { incident, audit });
     res.json(incident);
   });
 
-  // Community Reports (Assault, Household Violence, Unsafe Location, Fire, Medical)
+  // Community Reports with Address, Phone, Profile Data & Hierarchical Police/Fire/Hospital Routing
   app.post('/api/community/reports', (req, res) => {
-    const { category, city, areaLabel, lat, lng, description, anonymous = true } = req.body as {
+    const {
+      category,
+      city,
+      area,
+      street,
+      fullAddress,
+      areaLabel,
+      lat,
+      lng,
+      description,
+      anonymous = false,
+      shareProfileWithTeam = true,
+    } = req.body as {
       category: CommunityReport['category'];
-      city: string;
-      areaLabel: string;
+      city?: string;
+      area?: string;
+      street?: string;
+      fullAddress?: string;
+      areaLabel?: string;
       lat: number;
       lng: number;
       description: string;
       anonymous?: boolean;
+      shareProfileWithTeam?: boolean;
     };
+
+    const resolvedCity = city || state.citizenProfile.city || 'Lahore';
+    const resolvedArea = area || state.citizenProfile.area || 'Gulberg III';
+    const resolvedStreet = street || state.citizenProfile.street || 'Main Boulevard';
+    const resolvedAddress =
+      fullAddress ||
+      state.citizenProfile.fullAddress ||
+      `${resolvedStreet}, ${resolvedArea}, ${resolvedCity}`;
 
     let moderationStatus: CommunityReport['moderationStatus'] = 'pending_review';
     let routedStationName: string | undefined;
+    const forumPosts: AgencyForumPost[] = [];
 
-    // Auto-route urgent assault/household violence/fire/medical reports to nearest station
+    const reportId = `CR-${Math.floor(200 + Math.random() * 799)}`;
+
+    let targetAgency: 'police' | 'fire' | 'hospital' | null = null;
     if (category === 'assault' || category === 'household_violence') {
-      const nearest = findNearestStations(lat, lng, 'police')[0];
       moderationStatus = 'escalated_police';
-      routedStationName = nearest?.station.name;
+      targetAgency = 'police';
     } else if (category === 'fire_hazard') {
-      const nearest = findNearestStations(lat, lng, 'fire')[0];
       moderationStatus = 'escalated_fire';
-      routedStationName = nearest?.station.name;
+      targetAgency = 'fire';
     } else if (category === 'medical_emergency') {
-      const nearest = findNearestStations(lat, lng, 'hospital')[0];
       moderationStatus = 'escalated_hospital';
-      routedStationName = nearest?.station.name;
+      targetAgency = 'hospital';
+    }
+
+    if (targetAgency) {
+      const match = rankStationsHierarchical(
+        lat,
+        lng,
+        resolvedCity,
+        resolvedArea,
+        resolvedStreet,
+        targetAgency
+      )[0];
+      if (match) {
+        routedStationName = match.station.name;
+        const contactInfo = shareProfileWithTeam
+          ? `${state.citizenProfile.name} (${state.citizenProfile.phone}) at ${resolvedAddress}`
+          : `Anonymous reporter at ${resolvedStreet}, ${resolvedArea}, ${resolvedCity}`;
+        const post = pushForumDispatchPost(
+          match.station,
+          match.distanceKm,
+          match.proximityTier,
+          `[${reportId}] ${category.replace('_', ' ').toUpperCase()} — ${contactInfo}. Details: ${description}`,
+          { reportId }
+        );
+        forumPosts.push(post);
+      }
     }
 
     const report: CommunityReport = {
-      id: `CR-${Math.floor(200 + Math.random() * 799)}`,
+      id: reportId,
       category,
-      city: city || 'Lahore',
-      areaLabel: areaLabel || `${city} Reported Location`,
+      city: resolvedCity,
+      area: resolvedArea,
+      street: resolvedStreet,
+      areaLabel: areaLabel || `${resolvedStreet}, ${resolvedArea}`,
+      fullAddress: shareProfileWithTeam ? resolvedAddress : undefined,
       lat,
       lng,
       description,
       anonymous,
+      shareProfileWithTeam,
+      reporterName: shareProfileWithTeam ? state.citizenProfile.name : undefined,
+      reporterPhone: shareProfileWithTeam ? state.citizenProfile.phone : undefined,
+      reporterBloodGroup:
+        shareProfileWithTeam && state.citizenProfile.shareMedicalOnSos
+          ? state.citizenProfile.bloodGroup
+          : undefined,
       createdAt: new Date().toISOString(),
       moderationStatus,
       routedStationName,
@@ -646,15 +891,15 @@ async function startServer() {
 
     state.communityReports.unshift(report);
     const audit = addAudit(
-      anonymous ? 'Anonymous Reporter' : state.citizenProfile.name,
-      'Community',
+      shareProfileWithTeam ? state.citizenProfile.name : 'Anonymous Reporter',
+      'Citizen App',
       'COMMUNITY_REPORT_FILED',
       report.id,
-      `${category} in ${report.city}${routedStationName ? ` → Routed to ${routedStationName}` : ' (Queued for moderation)'}`
+      `${category} at ${resolvedAddress}${routedStationName ? ` → Routed to ${routedStationName}` : ' (Queued for review)'}`
     );
 
     saveState(state);
-    broadcast('community:updated', { reports: state.communityReports, audit });
+    broadcast('community:updated', { reports: state.communityReports, audit, forumPosts });
     res.status(201).json(report);
   });
 
@@ -668,12 +913,36 @@ async function startServer() {
     if (!report) return res.status(404).json({ error: 'Report not found' });
 
     report.moderationStatus = moderationStatus;
-    if (moderationStatus === 'escalated_police' && !report.routedStationName) {
-      report.routedStationName = findNearestStations(report.lat, report.lng, 'police')[0]?.station.name;
-    } else if (moderationStatus === 'escalated_fire' && !report.routedStationName) {
-      report.routedStationName = findNearestStations(report.lat, report.lng, 'fire')[0]?.station.name;
-    } else if (moderationStatus === 'escalated_hospital' && !report.routedStationName) {
-      report.routedStationName = findNearestStations(report.lat, report.lng, 'hospital')[0]?.station.name;
+    const forumPosts: AgencyForumPost[] = [];
+
+    const agencyMap: Record<string, 'police' | 'fire' | 'hospital'> = {
+      escalated_police: 'police',
+      escalated_fire: 'fire',
+      escalated_hospital: 'hospital',
+    };
+    const ag = agencyMap[moderationStatus];
+    if (ag) {
+      const match = rankStationsHierarchical(
+        report.lat,
+        report.lng,
+        report.city,
+        report.area,
+        report.street,
+        ag
+      )[0];
+      if (match) {
+        report.routedStationName = match.station.name;
+        const post = pushForumDispatchPost(
+          match.station,
+          match.distanceKm,
+          match.proximityTier,
+          `[${report.id}] GuardAI Team escalated ${report.category.replace('_', ' ')} at ${
+            report.fullAddress || report.areaLabel
+          }${report.reporterPhone ? ` (Phone: ${report.reporterPhone})` : ''}.`,
+          { reportId: report.id }
+        );
+        forumPosts.push(post);
+      }
     }
 
     const audit = addAudit(
@@ -685,8 +954,49 @@ async function startServer() {
     );
 
     saveState(state);
-    broadcast('community:updated', { reports: state.communityReports, audit });
+    broadcast('community:updated', { reports: state.communityReports, audit, forumPosts });
     res.json(report);
+  });
+
+  // Police / Hospital / Fire Station Forum Posts
+  app.post('/api/forums/posts', (req, res) => {
+    const { stationId, message, author, role, statusTag = 'acknowledged', incidentId, reportId } =
+      req.body as {
+        stationId: string;
+        message: string;
+        author: string;
+        role: string;
+        statusTag?: AgencyForumPost['statusTag'];
+        incidentId?: string;
+        reportId?: string;
+      };
+
+    const station = state.stations.find((s) => s.id === stationId);
+    if (!station) return res.status(404).json({ error: 'Station not found' });
+    if (!message || !message.trim()) return res.status(400).json({ error: 'Message is required' });
+
+    const post: AgencyForumPost = {
+      id: `fp-${Date.now()}`,
+      agency: station.agency,
+      stationId: station.id,
+      stationName: station.name,
+      city: station.city,
+      area: station.area,
+      street: station.street,
+      incidentId,
+      reportId,
+      author: author || `${station.name} Duty Officer`,
+      role: role || `${station.agency.toUpperCase()} Forum Liaison`,
+      message: message.trim(),
+      statusTag,
+      createdAt: new Date().toISOString(),
+    };
+
+    state.agencyForumPosts.unshift(post);
+    const audit = addAudit(post.author, post.role, 'AGENCY_FORUM_REPLY', station.id, message.trim());
+    saveState(state);
+    broadcast('forum:posted', { post, audit });
+    res.status(201).json(post);
   });
 
   // Server-Side Gemini AI Incident Triage Summary & Risk Scoring
@@ -705,13 +1015,14 @@ async function startServer() {
       const promptText = `Analyze this emergency incident from Pakistan for a human control-room operator.
 Remember: AI only assists human decisions and NEVER decides alone that someone is safe.
 Incident ID: ${incident.id}
-City & Area: ${incident.city} — ${incident.areaLabel}
+Citizen: ${incident.citizenName} (${incident.citizenPhone})
+Location: ${incident.citizenAddress} (${incident.city} -> ${incident.area} -> ${incident.street})
 Trigger Type: ${incident.trigger}
 Silent Mode: ${incident.silentMode}
 Battery at Trigger: ${incident.batteryAtTrigger}%
 Transcript / Sensor Note: ${incident.transcriptOrAudioNote || 'No transcript provided'}
 Consented Medical Summary: ${incident.medicalSummaryShared || 'Not shared'}
-Nearest Dispatches: ${incident.regionalDispatches.map((d) => `${d.stationName} (${d.distanceKm} km)`).join('; ') || 'None yet'}`;
+Nearest Dispatches: ${incident.regionalDispatches.map((d) => `${d.stationName} (${d.distanceKm} km, ${d.proximityTier})`).join('; ') || 'None yet'}`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-4-hydrogen',
@@ -774,7 +1085,6 @@ Nearest Dispatches: ${incident.regionalDispatches.map((d) => `${d.stationName} (
     }
   });
 
-  // Server-Side Gemini AI Audio Phrase / Acoustic Distress Classifier
   app.post('/api/ai/analyze-audio-phrase', async (req, res) => {
     const { transcript, soundEvent } = req.body as { transcript?: string; soundEvent?: string };
     const text = (transcript || '').trim();
@@ -820,7 +1130,6 @@ Acoustic Sensor Event: "${sound || 'None'}"`,
     }
   });
 
-  // Vite / Static Serving
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

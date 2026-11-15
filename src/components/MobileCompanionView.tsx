@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { PAKISTAN_CITY_HUBS } from '../data/pakistanSeed';
 import { MOBILE_TRANSLATIONS } from '../i18n/translations';
+import { PWAInstallButton } from './PWAInstallButton';
 import type {
   CitizenProfile,
   CommunityReport,
@@ -55,6 +56,9 @@ interface MobileCompanionViewProps {
     lat: number;
     lng: number;
     city: string;
+    area?: string;
+    street?: string;
+    fullAddress?: string;
     areaLabel: string;
     transcriptOrAudioNote?: string;
     agencyOverride?: EmergencyAgency;
@@ -65,11 +69,15 @@ interface MobileCompanionViewProps {
   onSubmitCommunityReport: (report: {
     category: CommunityReport['category'];
     city: string;
+    area: string;
+    street: string;
+    fullAddress: string;
     areaLabel: string;
     lat: number;
     lng: number;
     description: string;
     anonymous: boolean;
+    shareProfileWithTeam: boolean;
   }) => Promise<CommunityReport>;
   onContactAck: (incidentId: string, contactId: string, contactName: string) => Promise<void>;
   onPingLocation: (incidentId: string, lat: number, lng: number, batteryPercent: number) => Promise<void>;
@@ -133,9 +141,11 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
 
   // Community / Assault / Household Report Form
   const [reportCategory, setReportCategory] = useState<CommunityReport['category']>('assault');
-  const [reportArea, setReportArea] = useState('Liberty Market Parking Lane');
+  const [reportArea, setReportArea] = useState(state.citizenProfile.area || 'Gulberg III');
+  const [reportStreet, setReportStreet] = useState(state.citizenProfile.street || 'Main Boulevard, Street 14');
   const [reportDesc, setReportDesc] = useState('');
-  const [reportAnon, setReportAnon] = useState(true);
+  const [reportAnon, setReportAnon] = useState(false);
+  const [shareProfileWithTeam, setShareProfileWithTeam] = useState(true);
   const [reportStatusMsg, setReportStatusMsg] = useState<string | null>(null);
 
   // Last created incident by this phone
@@ -277,7 +287,10 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
       lat: citizenCoords.lat,
       lng: citizenCoords.lng,
       city,
-      areaLabel: `${city} Mobile GPS Corridor`,
+      area: state.citizenProfile.area,
+      street: state.citizenProfile.street,
+      fullAddress: state.citizenProfile.fullAddress,
+      areaLabel: `${state.citizenProfile.street}, ${state.citizenProfile.area}`,
       transcriptOrAudioNote: note,
       agencyOverride,
       batteryPercent,
@@ -372,17 +385,21 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
     const created = await onSubmitCommunityReport({
       category: reportCategory,
       city: state.citizenProfile.city,
-      areaLabel: reportArea.trim() || `${state.citizenProfile.city} Reported Area`,
+      area: reportArea.trim() || state.citizenProfile.area,
+      street: reportStreet.trim() || state.citizenProfile.street,
+      fullAddress: state.citizenProfile.fullAddress,
+      areaLabel: `${reportStreet.trim() || state.citizenProfile.street}, ${reportArea.trim() || state.citizenProfile.area}`,
       lat: citizenCoords.lat + (Math.random() - 0.5) * 0.01,
       lng: citizenCoords.lng + (Math.random() - 0.5) * 0.01,
       description: reportDesc.trim(),
       anonymous: reportAnon,
+      shareProfileWithTeam,
     });
     setReportDesc('');
     setReportStatusMsg(
       created.routedStationName
-        ? `Urgent report ${created.id} routed directly to ${created.routedStationName}.`
-        : `Report ${created.id} submitted for moderation.`
+        ? `Report ${created.id} sent to GuardAI Team & routed to ${created.routedStationName}.`
+        : `Report ${created.id} sent to GuardAI Working Team for assistance.`
     );
   };
 
@@ -963,21 +980,39 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                         <option value="unsafe_lighting">Unsafe Lighting / Dark Corridor (Moderated)</option>
                       </select>
 
-                      <input
-                        type="text"
-                        value={reportArea}
-                        onChange={(e) => setReportArea(e.target.value)}
-                        placeholder="Landmark / Street / Sector..."
-                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
-                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={reportArea}
+                          onChange={(e) => setReportArea(e.target.value)}
+                          placeholder="Area / Sector..."
+                          className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                        />
+                        <input
+                          type="text"
+                          value={reportStreet}
+                          onChange={(e) => setReportStreet(e.target.value)}
+                          placeholder="Street / Lane..."
+                          className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                        />
+                      </div>
 
                       <textarea
                         rows={3}
                         value={reportDesc}
                         onChange={(e) => setReportDesc(e.target.value)}
-                        placeholder="Describe what is happening so the nearest station can respond..."
+                        placeholder="Describe what is happening so GuardAI & nearest station can help..."
                         className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
                       />
+
+                      <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-200 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={shareProfileWithTeam}
+                          onChange={(e) => setShareProfileWithTeam(e.target.checked)}
+                        />
+                        Share my address, phone &amp; profile with GuardAI team so they can help me
+                      </label>
 
                       <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                         <input
@@ -985,14 +1020,14 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                           checked={reportAnon}
                           onChange={(e) => setReportAnon(e.target.checked)}
                         />
-                        Submit anonymously (hide my name/phone from community advisories)
+                        Keep anonymous in public community advisories
                       </label>
 
                       <button
                         type="submit"
                         className="w-full min-h-[48px] rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold cursor-pointer"
                       >
-                        Submit &amp; Route to Nearest Station
+                        Submit &amp; Alert Nearest Station
                       </button>
 
                       {reportStatusMsg && (
@@ -1006,16 +1041,57 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
 
                 {phoneTab === 'account' && (
                   <div className="space-y-4">
-                    {/* Phone OTP Login */}
+                    {/* Profile & Home Address (Shared with GuardAI Team on Report) */}
                     <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-4 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-900 dark:text-white">
-                          Phone OTP Account
+                          Citizen Profile &amp; Address
                         </span>
                         <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
-                          {state.citizenProfile.verified ? 'Verified' : 'Unverified'}
+                          {state.citizenProfile.verified ? 'OTP Verified' : 'Unverified'}
                         </span>
                       </div>
+                      <input
+                        type="text"
+                        value={state.citizenProfile.name}
+                        onChange={(e) => onUpdateProfile({ name: e.target.value })}
+                        placeholder="Full Name"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={state.citizenProfile.city}
+                          onChange={(e) => onUpdateProfile({ city: e.target.value })}
+                          className="px-2.5 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                        >
+                          {Object.keys(PAKISTAN_CITY_HUBS).map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={state.citizenProfile.area}
+                          onChange={(e) => onUpdateProfile({ area: e.target.value })}
+                          placeholder="Area / Sector"
+                          className="px-2.5 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={state.citizenProfile.street}
+                        onChange={(e) => onUpdateProfile({ street: e.target.value })}
+                        placeholder="Street / Lane"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
+                      <input
+                        type="text"
+                        value={state.citizenProfile.fullAddress}
+                        onChange={(e) => onUpdateProfile({ fullAddress: e.target.value })}
+                        placeholder="Full Residential / Current Address"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -1176,8 +1252,31 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
         </div>
       </div>
 
-      {/* Right: Desktop Companion Telemetry, Offline Queue & Privacy-Scoped Family Circle */}
+      {/* Right: Desktop Companion Telemetry, Downloadable App Card & Offline Queue */}
       <div className="xl:col-span-7 space-y-6">
+        {/* Standalone Downloadable App Card */}
+        <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-5 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              Standalone Citizen Mobile App (Installable PWA)
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Download GuardAI separately on any smartphone or desktop at <span className="font-mono">/app</span>. All SOS alerts and reports sync live to the Working Team Dashboard.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton />
+            <a
+              href="/app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap"
+            >
+              Open /app Window
+            </a>
+          </div>
+        </div>
+
         {/* Network & Offline Resilience Simulator */}
         <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">

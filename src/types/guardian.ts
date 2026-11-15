@@ -48,6 +48,9 @@ export interface CitizenProfile {
   phone: string;
   verified: boolean;
   city: string;
+  area: string;
+  street: string;
+  fullAddress: string;
   language: LanguageCode;
   bloodGroup?: string;
   allergies?: string;
@@ -64,10 +67,15 @@ export interface EmergencyStation {
   name: string;
   agency: 'police' | 'hospital' | 'fire';
   city: string;
+  area: string;
+  street: string;
   phone: string;
   lat: number;
   lng: number;
   district: string;
+  availableUnits: number;
+  capacityLabel: string;
+  forumChannel: string;
 }
 
 export interface ResponderUnit {
@@ -76,6 +84,8 @@ export interface ResponderUnit {
   name: string;
   agency: 'police' | 'hospital' | 'fire' | 'verified_guard';
   city: string;
+  area: string;
+  street: string;
   status: 'available' | 'en_route' | 'on_scene' | 'off_duty';
   lat: number;
   lng: number;
@@ -92,7 +102,7 @@ export interface EvidenceRecord {
   lat: number;
   lng: number;
   durationSec?: number;
-  uploadProgress: number; // 0-100
+  uploadProgress: number;
   status: 'queued_local' | 'uploading' | 'secured';
   integrityHash: string;
   summaryNote: string;
@@ -100,7 +110,7 @@ export interface EvidenceRecord {
 
 export interface AIAnalysisResult {
   summary: string;
-  riskScore: number; // 0-100
+  riskScore: number;
   recommendedPriority: IncidentPriority;
   recommendedAgency: EmergencyAgency;
   distressIndicators: string[];
@@ -114,7 +124,11 @@ export interface RegionalDispatchNotice {
   stationId: string;
   stationName: string;
   agency: 'police' | 'hospital' | 'fire';
+  city: string;
+  area: string;
+  street: string;
   distanceKm: number;
+  proximityTier: 'same_street' | 'same_area' | 'same_city' | 'regional';
   notifiedAt: string;
   sharedFields: string[];
   withheldFields: string[];
@@ -134,7 +148,10 @@ export interface Incident {
   citizenId: string;
   citizenName: string;
   citizenPhone: string;
+  citizenAddress: string;
   city: string;
+  area: string;
+  street: string;
   areaLabel: string;
   trigger: IncidentTrigger;
   status: IncidentStatus;
@@ -148,6 +165,7 @@ export interface Incident {
   batteryAtTrigger: number;
   transcriptOrAudioNote?: string;
   medicalSummaryShared?: string;
+  trustedContactsSummary?: { name: string; phone: string; relation: string }[];
   assignedResponderId?: string;
   escalatedToSupervisor: boolean;
   regionalDispatches: RegionalDispatchNotice[];
@@ -168,14 +186,44 @@ export interface CommunityReport {
     | 'fire_hazard'
     | 'medical_emergency';
   city: string;
+  area: string;
+  street: string;
   areaLabel: string;
+  fullAddress?: string;
   lat: number;
   lng: number;
   description: string;
   anonymous: boolean;
+  shareProfileWithTeam: boolean;
+  reporterName?: string;
+  reporterPhone?: string;
+  reporterBloodGroup?: string;
   createdAt: string;
-  moderationStatus: 'pending_review' | 'verified_advisory' | 'escalated_police' | 'escalated_fire' | 'escalated_hospital' | 'dismissed';
+  moderationStatus:
+    | 'pending_review'
+    | 'verified_advisory'
+    | 'escalated_police'
+    | 'escalated_fire'
+    | 'escalated_hospital'
+    | 'dismissed';
   routedStationName?: string;
+}
+
+export interface AgencyForumPost {
+  id: string;
+  agency: 'police' | 'hospital' | 'fire';
+  stationId: string;
+  stationName: string;
+  city: string;
+  area: string;
+  street: string;
+  incidentId?: string;
+  reportId?: string;
+  author: string;
+  role: string;
+  message: string;
+  statusTag: 'alerted' | 'acknowledged' | 'dispatched' | 'on_scene';
+  createdAt: string;
 }
 
 export interface SafeZone {
@@ -224,6 +272,7 @@ export interface GuardianStateSnapshot {
   responders: ResponderUnit[];
   stations: EmergencyStation[];
   communityReports: CommunityReport[];
+  agencyForumPosts: AgencyForumPost[];
   safeZones: SafeZone[];
   citizenProfile: CitizenProfile;
   operators: OperatorAccount[];

@@ -444,13 +444,23 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
                             : 'Live WebSocket'}
                       </span>
                     </div>
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                      {selectedIncident.citizenName} ({selectedIncident.citizenPhone})
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                      <span>{selectedIncident.citizenName}</span>
+                      <a
+                        href={`tel:${selectedIncident.citizenPhone}`}
+                        className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-blue-700 dark:text-blue-400 hover:underline"
+                      >
+                        <PhoneCall className="w-3.5 h-3.5" />
+                        {selectedIncident.citizenPhone}
+                      </a>
                     </h2>
+                    <div className="text-xs text-slate-800 dark:text-slate-200 font-medium">
+                      Address: {selectedIncident.citizenAddress}
+                    </div>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 dark:text-slate-300">
                       <span className="inline-flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                        {selectedIncident.areaLabel}, {selectedIncident.city}
+                        {selectedIncident.city} → {selectedIncident.area} → {selectedIncident.street}
                       </span>
                       <span className="font-mono tabular-nums text-slate-500">
                         {selectedIncident.location.lat.toFixed(4)}, {selectedIncident.location.lng.toFixed(4)} (±
@@ -468,6 +478,14 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
                         Open Responder Navigation
                       </a>
                     </div>
+                    {selectedIncident.trustedContactsSummary && selectedIncident.trustedContactsSummary.length > 0 && (
+                      <div className="text-xs text-slate-500 dark:text-slate-400 pt-0.5">
+                        Emergency Contacts:{' '}
+                        {selectedIncident.trustedContactsSummary
+                          .map((c) => `${c.name} (${c.phone})`)
+                          .join(' · ')}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -710,8 +728,11 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
                                 {disp.stationName}
                               </span>
                               <span className="font-mono tabular-nums text-slate-500">
-                                {disp.distanceKm} km · {disp.acknowledgement}
+                                {disp.proximityTier.replace('_', ' ')} · {disp.distanceKm} km · {disp.acknowledgement}
                               </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {disp.city} → {disp.area} → {disp.street}
                             </div>
                             <div className="text-slate-600 dark:text-slate-300">
                               <span className="font-medium text-emerald-700 dark:text-emerald-400">Shared:</span>{' '}
