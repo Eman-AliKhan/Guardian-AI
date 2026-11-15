@@ -32,6 +32,8 @@ import {
 } from 'lucide-react';
 import { PAKISTAN_CITY_HUBS } from '../data/pakistanSeed';
 import { MOBILE_TRANSLATIONS } from '../i18n/translations';
+import { normalizeCnic } from '../lib/firebase';
+import { CustomerOnboardingPanel } from './CustomerOnboardingPanel';
 import { PWAInstallButton } from './PWAInstallButton';
 import type {
   CitizenProfile,
@@ -66,6 +68,7 @@ interface MobileCompanionViewProps {
   }) => Promise<Incident | null>;
   onUploadEvidence: (incidentId: string, type: 'audio' | 'photo' | 'video', note: string) => Promise<void>;
   onUpdateProfile: (profile: Partial<CitizenProfile>) => Promise<void>;
+  onRegisterCitizen: (profile: Partial<CitizenProfile>) => Promise<void>;
   onSubmitCommunityReport: (report: {
     category: CommunityReport['category'];
     city: string;
@@ -91,10 +94,12 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
   onTriggerSos,
   onUploadEvidence,
   onUpdateProfile,
+  onRegisterCitizen,
   onSubmitCommunityReport,
   onContactAck,
   onPingLocation,
 }) => {
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [phoneTab, setPhoneTab] = useState<'sos' | 'audio' | 'journey' | 'report' | 'account'>('sos');
   const [lang, setLang] = useState<LanguageCode>(state.citizenProfile.language || 'en');
   const [largeButtons, setLargeButtons] = useState(false);
@@ -417,6 +422,22 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
       await onPingLocation(lastIncident.id, nextLat, nextLng, batteryPercent);
     }
   };
+
+  if (!state.citizenProfile.loggedIn || !state.citizenProfile.profileCompleted || showOnboarding) {
+    return (
+      <CustomerOnboardingPanel
+        profile={state.citizenProfile}
+        isEditingExisting={showOnboarding}
+        onCancelEdit={() => setShowOnboarding(false)}
+        onRegisterCitizen={async (payload) => {
+          await onRegisterCitizen(payload);
+          if (payload.profileCompleted) {
+            setShowOnboarding(false);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
@@ -1043,13 +1064,17 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                   <div className="space-y-4">
                     {/* Profile & Home Address (Shared with GuardAI Team on Report) */}
                     <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-4 space-y-2.5">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-slate-900 dark:text-white">
-                          Citizen Profile &amp; Address
+                          Citizen Identity &amp; Address
                         </span>
-                        <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
-                          {state.citizenProfile.verified ? 'OTP Verified' : 'Unverified'}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowOnboarding(true)}
+                          className="text-[11px] font-semibold text-blue-700 dark:text-blue-400 hover:underline cursor-pointer"
+                        >
+                          Edit Full Card / Switch
+                        </button>
                       </div>
                       <input
                         type="text"
@@ -1057,6 +1082,14 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                         onChange={(e) => onUpdateProfile({ name: e.target.value })}
                         placeholder="Full Name"
                         className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
+                      <input
+                        type="text"
+                        value={state.citizenProfile.cnic}
+                        onChange={(e) => onUpdateProfile({ cnic: normalizeCnic(e.target.value) })}
+                        placeholder="CNIC (35202-1234567-1)"
+                        maxLength={15}
+                        className="w-full px-3 py-2 text-xs font-mono border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
                       />
                       <div className="grid grid-cols-2 gap-2">
                         <select
@@ -1128,19 +1161,23 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                       )}
                     </div>
 
-                    {/* Optional Medical Notes */}
+                    {/* Medical Notes & Blood Group */}
                     <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-4 space-y-2.5">
                       <div className="text-xs font-bold text-slate-900 dark:text-white">
-                        Optional Medical Notes (Consent-Controlled)
+                        Blood Group &amp; Medical Notes (Synced Live)
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={state.citizenProfile.bloodGroup || ''}
+                        <select
+                          value={state.citizenProfile.bloodGroup || 'O+'}
                           onChange={(e) => onUpdateProfile({ bloodGroup: e.target.value })}
-                          placeholder="Blood Group"
-                          className="px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
-                        />
+                          className="px-3 py-2 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                        >
+                          {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'].map((bg) => (
+                            <option key={bg} value={bg}>
+                              Blood: {bg}
+                            </option>
+                          ))}
+                        </select>
                         <input
                           type="text"
                           value={state.citizenProfile.allergies || ''}
@@ -1149,13 +1186,27 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
                           className="px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
                         />
                       </div>
+                      <input
+                        type="text"
+                        value={state.citizenProfile.medicalConditions || ''}
+                        onChange={(e) => onUpdateProfile({ medicalConditions: e.target.value })}
+                        placeholder="Medical conditions (e.g. Asthma, Diabetes)"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
+                      <input
+                        type="text"
+                        value={state.citizenProfile.emergencyNotes || ''}
+                        onChange={(e) => onUpdateProfile({ emergencyNotes: e.target.value })}
+                        placeholder="Emergency notes for Rescue 1122 / Control Room"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900"
+                      />
                       <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                         <input
                           type="checkbox"
                           checked={state.citizenProfile.shareMedicalOnSos}
                           onChange={(e) => onUpdateProfile({ shareMedicalOnSos: e.target.checked })}
                         />
-                        Share medical summary only with Rescue 1122 / Hospital on SOS
+                        Share CNIC &amp; medical summary with Rescue 1122 / Hospital on SOS
                       </label>
                     </div>
 
@@ -1252,8 +1303,61 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
         </div>
       </div>
 
-      {/* Right: Desktop Companion Telemetry, Downloadable App Card & Offline Queue */}
+      {/* Right: Desktop Companion Telemetry, Live Safety ID Card & Offline Queue */}
       <div className="xl:col-span-7 space-y-6">
+        {/* Logged-In Citizen Live Safety ID Card */}
+        <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                Logged In · Synced Live to GuardAI Control Room
+              </div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                {state.citizenProfile.name} · CNIC {state.citizenProfile.cnic}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowOnboarding(true)}
+              className="px-3.5 py-2 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              Edit CNIC &amp; Medical Info
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800 text-xs">
+            <div>
+              <div className="text-slate-500">Blood Group</div>
+              <div className="font-bold text-red-600 dark:text-red-400 mt-0.5">
+                {state.citizenProfile.bloodGroup || 'Unknown'}
+              </div>
+            </div>
+            <div>
+              <div className="text-slate-500">Phone</div>
+              <div className="font-mono font-medium text-slate-900 dark:text-white mt-0.5">
+                {state.citizenProfile.phone}
+              </div>
+            </div>
+            <div className="col-span-2">
+              <div className="text-slate-500">Registered Address</div>
+              <div className="font-medium text-slate-900 dark:text-white mt-0.5">
+                {state.citizenProfile.fullAddress}
+              </div>
+            </div>
+          </div>
+          {(state.citizenProfile.allergies || state.citizenProfile.medicalConditions || state.citizenProfile.emergencyNotes) && (
+            <div className="text-xs text-slate-600 dark:text-slate-300 pt-1">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">Medical Notes: </span>
+              {[
+                state.citizenProfile.allergies && `Allergies: ${state.citizenProfile.allergies}`,
+                state.citizenProfile.medicalConditions,
+                state.citizenProfile.emergencyNotes,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
+          )}
+        </div>
+
         {/* Standalone Downloadable App Card */}
         <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-5 flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -1261,7 +1365,7 @@ export const MobileCompanionView: React.FC<MobileCompanionViewProps> = ({
               Standalone Citizen Mobile App (Installable PWA)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Download GuardAI separately on any smartphone or desktop at <span className="font-mono">/app</span>. All SOS alerts and reports sync live to the Working Team Dashboard.
+              Download GuardAI separately on any smartphone or desktop at <span className="font-mono">/app</span>. All profile info, SOS alerts, and reports sync live to the Working Team Dashboard.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">

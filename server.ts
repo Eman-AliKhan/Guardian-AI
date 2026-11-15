@@ -12,6 +12,7 @@ import type {
   AIAnalysisResult,
   AgencyForumPost,
   AuditLogEntry,
+  CitizenProfile,
   CommunityReport,
   EmergencyAgency,
   EmergencyStation,
@@ -22,6 +23,7 @@ import type {
   IncidentTrigger,
   LatLng,
   RegionalDispatchNotice,
+  RegisteredCitizenRecord,
 } from './src/types/guardian.ts';
 
 const PORT = 3000;
@@ -49,7 +51,9 @@ function loadState(): GuardianStateSnapshot {
         Array.isArray(parsed.incidents) &&
         Array.isArray(parsed.stations) &&
         Array.isArray(parsed.agencyForumPosts) &&
-        typeof parsed.citizenProfile?.fullAddress === 'string'
+        Array.isArray(parsed.registeredCitizens) &&
+        typeof parsed.citizenProfile?.fullAddress === 'string' &&
+        typeof parsed.citizenProfile?.cnic === 'string'
       ) {
         return parsed;
       }
@@ -255,7 +259,16 @@ async function startServer() {
   app.use(express.json({ limit: '4mb' }));
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    if (pathname === '/ws') {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    }
+  });
 
   function broadcast(type: string, payload: unknown) {
     const message = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
@@ -367,12 +380,87 @@ async function startServer() {
     res.json({ verified: true, citizenProfile: state.citizenProfile });
   });
 
+  function upsertRegisteredCitizen(profile: CitizenProfile): RegisteredCitizenRecord {
+    const nowIso = new Date().toISOString();
+    const existingIdx = state.registeredCitizens.findIndex(
+      (c) =>
+        (profile.firebaseUid && c.firebaseUid === profile.firebaseUid) ||
+        c.id === profile.id ||
+        (profile.cnic && c.cnic === profile.cnic)
+    );
+    const prev = existingIdx >= 0 ? state.registeredCitizens[existingIdx] : undefined;
+    const record: RegisteredCitizenRecord = {
+      ...profile,
+      lastSyncedAt: nowIso,
+      registeredAt: prev?.registeredAt || nowIso,
+      updatedAt: nowIso,
+    };
+    if (existingIdx >= 0) {
+      state.registeredCitizens.splice(existingIdx, 1);
+    }
+    state.registeredCitizens.unshift(record);
+    return record;
+  }
+
   app.put('/api/citizen/profile', (req, res) => {
-    const updates = req.body;
-    state.citizenProfile = { ...state.citizenProfile, ...updates };
+    const updates = req.body as Partial<CitizenProfile>;
+    const nowIso = new Date().toISOString();
+    state.citizenProfile = {
+      ...state.citizenProfile,
+      ...updates,
+      lastSyncedAt: nowIso,
+    };
+    const record = upsertRegisteredCitizen(state.citizenProfile);
+    const audit = addAudit(
+      state.citizenProfile.name,
+      'Citizen App',
+      'CITIZEN_PROFILE_UPDATED',
+      state.citizenProfile.id,
+      `Synced CNIC ${state.citizenProfile.cnic || 'pending'} · Blood ${state.citizenProfile.bloodGroup || 'Unknown'} · ${state.citizenProfile.city}`
+    );
     saveState(state);
     broadcast('citizen:updated', state.citizenProfile);
-    res.json(state.citizenProfile);
+    broadcast('citizens:sync', {
+      registeredCitizens: state.registeredCitizens,
+      latestCitizen: record,
+      audit,
+    });
+    res.json({ citizenProfile: state.citizenProfile, record });
+  });
+
+  app.post('/api/citizens/register', (req, res) => {
+    const payload = req.body as Partial<CitizenProfile>;
+    const nowIso = new Date().toISOString();
+    const nextId =
+      payload.firebaseUid
+        ? `cit-${payload.firebaseUid.slice(0, 10)}`
+        : payload.id || state.citizenProfile.id || `cit-${Date.now()}`;
+
+    state.citizenProfile = {
+      ...state.citizenProfile,
+      ...payload,
+      id: nextId,
+      loggedIn: true,
+      profileCompleted: true,
+      verified: true,
+      lastSyncedAt: nowIso,
+    };
+    const record = upsertRegisteredCitizen(state.citizenProfile);
+    const audit = addAudit(
+      state.citizenProfile.name,
+      'Citizen App',
+      'CITIZEN_REGISTERED',
+      state.citizenProfile.id,
+      `Customer logged in & synced CNIC ${state.citizenProfile.cnic} · Blood ${state.citizenProfile.bloodGroup || 'Unknown'} · ${state.citizenProfile.fullAddress}`
+    );
+    saveState(state);
+    broadcast('citizen:updated', state.citizenProfile);
+    broadcast('citizens:sync', {
+      registeredCitizens: state.registeredCitizens,
+      latestCitizen: record,
+      audit,
+    });
+    res.status(201).json({ citizenProfile: state.citizenProfile, record });
   });
 
   // Create Incident with full Address (City/Area/Street), Phone, Profile & Auto-Posted Forum Dispatch
@@ -443,12 +531,13 @@ async function startServer() {
         proximityTier,
         notifiedAt: new Date().toISOString(),
         sharedFields: [
+          `CNIC (${state.citizenProfile.cnic})`,
           `Address (${resolvedAddress})`,
           `Phone (${state.citizenProfile.phone})`,
           `GPS (${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)})`,
           `Emergency Category (${agency.toUpperCase()})`,
           ...(state.citizenProfile.shareMedicalOnSos && state.citizenProfile.bloodGroup
-            ? [`Medical (${state.citizenProfile.bloodGroup})`]
+            ? [`Blood Group (${state.citizenProfile.bloodGroup})`]
             : []),
         ],
         withheldFields: ['Account OTP & Session History', 'Unrelated Media Archive'],
@@ -464,6 +553,8 @@ async function startServer() {
             state.citizenProfile.allergies ? ` · Allergies: ${state.citizenProfile.allergies}` : ''
           }${
             state.citizenProfile.medicalConditions ? ` · ${state.citizenProfile.medicalConditions}` : ''
+          }${
+            state.citizenProfile.emergencyNotes ? ` · Note: ${state.citizenProfile.emergencyNotes}` : ''
           }`
         : undefined;
 
@@ -471,6 +562,8 @@ async function startServer() {
       id,
       citizenId: state.citizenProfile.id,
       citizenName: state.citizenProfile.name,
+      citizenCnic: state.citizenProfile.cnic,
+      citizenBloodGroup: state.citizenProfile.bloodGroup,
       citizenPhone: state.citizenProfile.phone,
       citizenAddress: resolvedAddress,
       city: resolvedCity,
@@ -513,6 +606,8 @@ async function startServer() {
         match.proximityTier,
         `[${incident.id}] ${trigger.replace(/_/g, ' ').toUpperCase()} — Citizen: ${
           incident.citizenName
+        } · CNIC: ${incident.citizenCnic || 'N/A'} · Blood: ${
+          incident.citizenBloodGroup || 'N/A'
         } (${incident.citizenPhone}) · Address: ${incident.citizenAddress}. ${
           transcriptOrAudioNote || 'Immediate assistance requested.'
         }`,
@@ -879,6 +974,7 @@ async function startServer() {
       anonymous,
       shareProfileWithTeam,
       reporterName: shareProfileWithTeam ? state.citizenProfile.name : undefined,
+      reporterCnic: shareProfileWithTeam ? state.citizenProfile.cnic : undefined,
       reporterPhone: shareProfileWithTeam ? state.citizenProfile.phone : undefined,
       reporterBloodGroup:
         shareProfileWithTeam && state.citizenProfile.shareMedicalOnSos
@@ -1132,7 +1228,14 @@ Acoustic Sensor Event: "${sound || 'None'}"`,
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: {
+          server,
+          path: '/__vite_ws',
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

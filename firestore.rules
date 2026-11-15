@@ -1,0 +1,268 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'eman.crystal2021@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidCitizenPublic(data) {
+      return data.keys().hasAll([
+        'ownerId', 'name', 'city', 'area', 'verified',
+        'language', 'silentSosDefault', 'cancelWindowSeconds', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId', 'name', 'city', 'area', 'verified',
+        'language', 'silentSosDefault', 'cancelWindowSeconds', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ownerId) &&
+      data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+      data.city is string && data.city.size() >= 2 && data.city.size() <= 64 &&
+      data.area is string && data.area.size() >= 2 && data.area.size() <= 120 &&
+      data.verified is bool &&
+      data.language in ['en', 'ur', 'ps'] &&
+      data.silentSosDefault is bool &&
+      data.cancelWindowSeconds is int && data.cancelWindowSeconds >= 0 && data.cancelWindowSeconds <= 15 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCitizenPrivateInfo(data) {
+      return data.keys().hasAll([
+        'ownerId', 'cnic', 'phone', 'street', 'fullAddress',
+        'bloodGroup', 'shareMedicalOnSos', 'contactsSummary', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId', 'cnic', 'phone', 'street', 'fullAddress',
+        'bloodGroup', 'allergies', 'medicalConditions', 'emergencyNotes',
+        'dateOfBirth', 'gender', 'shareMedicalOnSos', 'contactsSummary', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ownerId) &&
+      data.cnic is string && data.cnic.size() == 15 && data.cnic.matches('^[0-9]{5}-[0-9]{7}-[0-9]$') &&
+      data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 24 &&
+      data.street is string && data.street.size() >= 2 && data.street.size() <= 160 &&
+      data.fullAddress is string && data.fullAddress.size() >= 4 && data.fullAddress.size() <= 300 &&
+      data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'] &&
+      (!('allergies' in data) || (data.allergies is string && data.allergies.size() <= 240)) &&
+      (!('medicalConditions' in data) || (data.medicalConditions is string && data.medicalConditions.size() <= 240)) &&
+      (!('emergencyNotes' in data) || (data.emergencyNotes is string && data.emergencyNotes.size() <= 300)) &&
+      (!('dateOfBirth' in data) || (data.dateOfBirth is string && data.dateOfBirth.size() <= 32)) &&
+      (!('gender' in data) || data.gender in ['Female', 'Male', 'Other', 'Prefer not to say']) &&
+      data.shareMedicalOnSos is bool &&
+      data.contactsSummary is list && data.contactsSummary.size() <= 5 &&
+      (data.contactsSummary.size() == 0 || (data.contactsSummary[0] is string && data.contactsSummary[0].size() <= 120)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidIncident(data) {
+      return data.keys().hasAll([
+        'ownerId', 'citizenId', 'citizenName', 'citizenPhone', 'citizenAddress',
+        'city', 'area', 'street', 'trigger', 'status', 'priority', 'agency',
+        'silentMode', 'lat', 'lng', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId', 'citizenId', 'citizenName', 'citizenCnic', 'citizenPhone', 'citizenAddress',
+        'bloodGroup', 'city', 'area', 'street', 'trigger', 'status', 'priority', 'agency',
+        'silentMode', 'lat', 'lng', 'transcriptOrAudioNote', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ownerId) &&
+      isValidId(data.citizenId) &&
+      data.citizenName is string && data.citizenName.size() >= 2 && data.citizenName.size() <= 120 &&
+      (!('citizenCnic' in data) || (data.citizenCnic is string && data.citizenCnic.size() <= 20)) &&
+      data.citizenPhone is string && data.citizenPhone.size() >= 7 && data.citizenPhone.size() <= 24 &&
+      data.citizenAddress is string && data.citizenAddress.size() >= 4 && data.citizenAddress.size() <= 300 &&
+      (!('bloodGroup' in data) || (data.bloodGroup is string && data.bloodGroup.size() <= 16)) &&
+      data.city is string && data.city.size() >= 2 && data.city.size() <= 64 &&
+      data.area is string && data.area.size() >= 2 && data.area.size() <= 120 &&
+      data.street is string && data.street.size() >= 2 && data.street.size() <= 160 &&
+      data.trigger is string && data.trigger.size() >= 2 && data.trigger.size() <= 48 &&
+      data.status in ['created', 'acknowledged', 'responder_assigned', 'resolved', 'false_alarm'] &&
+      data.priority in ['critical', 'high', 'moderate', 'low'] &&
+      data.agency in ['police', 'hospital', 'fire', 'multi'] &&
+      data.silentMode is bool &&
+      data.lat is number && data.lng is number &&
+      (!('transcriptOrAudioNote' in data) || (data.transcriptOrAudioNote is string && data.transcriptOrAudioNote.size() <= 500)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCommunityReport(data) {
+      return data.keys().hasAll([
+        'ownerId', 'citizenId', 'category', 'city', 'area', 'street',
+        'description', 'anonymous', 'shareProfileWithTeam', 'moderationStatus',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId', 'citizenId', 'category', 'city', 'area', 'street', 'fullAddress',
+        'description', 'anonymous', 'shareProfileWithTeam', 'moderationStatus',
+        'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ownerId) &&
+      isValidId(data.citizenId) &&
+      data.category in ['assault', 'household_violence', 'harassment', 'unsafe_lighting', 'fire_hazard', 'medical_emergency'] &&
+      data.city is string && data.city.size() >= 2 && data.city.size() <= 64 &&
+      data.area is string && data.area.size() >= 2 && data.area.size() <= 120 &&
+      data.street is string && data.street.size() >= 2 && data.street.size() <= 160 &&
+      (!('fullAddress' in data) || (data.fullAddress is string && data.fullAddress.size() <= 300)) &&
+      data.description is string && data.description.size() >= 4 && data.description.size() <= 600 &&
+      data.anonymous is bool &&
+      data.shareProfileWithTeam is bool &&
+      data.moderationStatus in ['pending_review', 'verified_advisory', 'escalated_police', 'escalated_fire', 'escalated_hospital', 'dismissed'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /citizens/{citizenId} {
+      allow get: if isValidId(citizenId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(citizenId) && isVerifiedUser() &&
+        citizenId == request.auth.uid &&
+        isValidCitizenPublic(incoming()) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(citizenId) && isVerifiedUser() &&
+        isValidCitizenPublic(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'city', 'area', 'verified', 'language',
+              'silentSosDefault', 'cancelWindowSeconds', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow get: if isValidId(citizenId) && isValidId(docId) && docId == 'pii' && isVerifiedUser() && (
+          get(/databases/$(database)/documents/citizens/$(citizenId)).data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidId(citizenId) && isValidId(docId) && docId == 'pii' && isVerifiedUser() &&
+          isValidCitizenPrivateInfo(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/citizens/$(citizenId)) &&
+          get(/databases/$(database)/documents/citizens/$(citizenId)).data.ownerId == request.auth.uid;
+        allow update: if isValidId(citizenId) && isValidId(docId) && docId == 'pii' && isVerifiedUser() &&
+          isValidCitizenPrivateInfo(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/citizens/$(citizenId)) && (
+            isAdmin() || (
+              get(/databases/$(database)/documents/citizens/$(citizenId)).data.ownerId == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'cnic', 'phone', 'street', 'fullAddress', 'bloodGroup',
+                'allergies', 'medicalConditions', 'emergencyNotes',
+                'dateOfBirth', 'gender', 'shareMedicalOnSos', 'contactsSummary', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if false;
+      }
+    }
+
+    match /incidents/{incidentId} {
+      allow get: if isValidId(incidentId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(incidentId) && isVerifiedUser() &&
+        isValidIncident(incoming()) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().citizenId == request.auth.uid &&
+        incoming().status == 'created' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/citizens/$(incoming().citizenId));
+      allow update: if isValidId(incidentId) && isVerifiedUser() &&
+        isValidIncident(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().citizenId == existing().citizenId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (existing().status != 'resolved' && existing().status != 'false_alarm')) && (
+          isAdmin() || (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+            incoming().status == 'false_alarm'
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /community_reports/{reportId} {
+      allow get: if isValidId(reportId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(reportId) && isVerifiedUser() &&
+        isValidCommunityReport(incoming()) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().citizenId == request.auth.uid &&
+        incoming().moderationStatus == 'pending_review' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/citizens/$(incoming().citizenId));
+      allow update: if isValidId(reportId) && isVerifiedUser() &&
+        isValidCommunityReport(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().citizenId == existing().citizenId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['moderationStatus', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && isVerifiedUser() && (
+        request.auth.uid == adminId || isAdmin()
+      );
+      allow list, create, update, delete: if false;
+    }
+  }
+}

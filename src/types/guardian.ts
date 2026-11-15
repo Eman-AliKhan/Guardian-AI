@@ -45,8 +45,16 @@ export interface TrustedContact {
 export interface CitizenProfile {
   id: string;
   name: string;
+  cnic: string;
   phone: string;
+  email?: string;
+  firebaseUid?: string;
   verified: boolean;
+  loggedIn: boolean;
+  profileCompleted: boolean;
+  authMethod?: 'google_firebase' | 'phone_otp';
+  dateOfBirth?: string;
+  gender?: 'Female' | 'Male' | 'Other' | 'Prefer not to say';
   city: string;
   area: string;
   street: string;
@@ -55,11 +63,18 @@ export interface CitizenProfile {
   bloodGroup?: string;
   allergies?: string;
   medicalConditions?: string;
+  emergencyNotes?: string;
   shareMedicalOnSos: boolean;
   batteryPercent: number;
   silentSosDefault: boolean;
   cancelWindowSeconds: number;
+  lastSyncedAt?: string;
   contacts: TrustedContact[];
+}
+
+export interface RegisteredCitizenRecord extends CitizenProfile {
+  registeredAt: string;
+  updatedAt: string;
 }
 
 export interface EmergencyStation {
@@ -147,6 +162,8 @@ export interface Incident {
   id: string;
   citizenId: string;
   citizenName: string;
+  citizenCnic?: string;
+  citizenBloodGroup?: string;
   citizenPhone: string;
   citizenAddress: string;
   city: string;
@@ -196,6 +213,7 @@ export interface CommunityReport {
   anonymous: boolean;
   shareProfileWithTeam: boolean;
   reporterName?: string;
+  reporterCnic?: string;
   reporterPhone?: string;
   reporterBloodGroup?: string;
   createdAt: string;
@@ -273,6 +291,7 @@ export interface GuardianStateSnapshot {
   stations: EmergencyStation[];
   communityReports: CommunityReport[];
   agencyForumPosts: AgencyForumPost[];
+  registeredCitizens: RegisteredCitizenRecord[];
   safeZones: SafeZone[];
   citizenProfile: CitizenProfile;
   operators: OperatorAccount[];

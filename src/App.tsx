@@ -17,6 +17,7 @@ import type {
   IncidentStatus,
   IncidentTrigger,
   OfflineQueuedSOS,
+  RegisteredCitizenRecord,
 } from './types/guardian';
 
 type TeamWorkspaceView = 'control-room' | 'forums' | 'responders' | 'governance';
@@ -188,6 +189,16 @@ export default function App() {
             }));
           } else if (msg.type === 'citizen:updated') {
             setState((prev) => ({ ...prev, citizenProfile: msg.payload }));
+          } else if (msg.type === 'citizens:sync') {
+            const { registeredCitizens, audit } = msg.payload as {
+              registeredCitizens: RegisteredCitizenRecord[];
+              audit?: GuardianStateSnapshot['auditLogs'][number];
+            };
+            setState((prev) => ({
+              ...prev,
+              registeredCitizens,
+              auditLogs: audit ? [audit, ...prev.auditLogs].slice(0, 100) : prev.auditLogs,
+            }));
           }
         } catch (err) {
           console.error('WebSocket message parse error:', err);
@@ -367,11 +378,43 @@ export default function App() {
   };
 
   const handleUpdateProfile = async (updates: Partial<CitizenProfile>) => {
-    await fetch('/api/citizen/profile', {
+    setState((prev) => ({
+      ...prev,
+      citizenProfile: { ...prev.citizenProfile, ...updates },
+    }));
+    const res = await fetch('/api/citizen/profile', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
+    if (res.ok) {
+      const data = (await res.json()) as { citizenProfile?: CitizenProfile };
+      if (data.citizenProfile) {
+        setState((prev) => ({ ...prev, citizenProfile: data.citizenProfile! }));
+      }
+    }
+  };
+
+  const handleRegisterCitizen = async (profile: Partial<CitizenProfile>) => {
+    const res = await fetch('/api/citizens/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as {
+        citizenProfile: CitizenProfile;
+        record: RegisteredCitizenRecord;
+      };
+      setState((prev) => ({
+        ...prev,
+        citizenProfile: data.citizenProfile,
+        registeredCitizens: [
+          data.record,
+          ...prev.registeredCitizens.filter((c) => c.id !== data.record.id),
+        ],
+      }));
+    }
   };
 
   const handleSubmitCommunityReport = async (report: {
@@ -479,7 +522,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="max-w-4xl mx-auto px-4 py-6">
+        <main className="max-w-6xl mx-auto px-4 py-6">
           <MobileCompanionView
             state={state}
             isOffline={isOffline}
@@ -488,6 +531,7 @@ export default function App() {
             onTriggerSos={handleTriggerSos}
             onUploadEvidence={handleUploadEvidence}
             onUpdateProfile={handleUpdateProfile}
+            onRegisterCitizen={handleRegisterCitizen}
             onSubmitCommunityReport={handleSubmitCommunityReport}
             onContactAck={handleContactAck}
             onPingLocation={handlePingLocation}

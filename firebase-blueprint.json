@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "CitizenPublic": {
+      "title": "CitizenPublic",
+      "description": "Non-PII citizen safety profile header stored in /citizens/{citizenId}.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "area": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "verified": { "type": "boolean" },
+        "language": { "type": "string", "enum": ["en", "ur", "ps"] },
+        "silentSosDefault": { "type": "boolean" },
+        "cancelWindowSeconds": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "city", "area", "verified", "language", "silentSosDefault", "cancelWindowSeconds", "createdAt", "updatedAt"]
+    },
+    "CitizenPrivateInfo": {
+      "title": "CitizenPrivateInfo",
+      "description": "Citizen PII including CNIC, phone, address, blood group, medical notes, and emergency contacts.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "cnic": { "type": "string", "minLength": 15, "maxLength": 15, "pattern": "^[0-9]{5}-[0-9]{7}-[0-9]$" },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "street": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "fullAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "bloodGroup": { "type": "string", "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "Unknown"] },
+        "allergies": { "type": "string", "maxLength": 240 },
+        "medicalConditions": { "type": "string", "maxLength": 240 },
+        "emergencyNotes": { "type": "string", "maxLength": 300 },
+        "dateOfBirth": { "type": "string", "maxLength": 32 },
+        "gender": { "type": "string", "enum": ["Female", "Male", "Other", "Prefer not to say"] },
+        "shareMedicalOnSos": { "type": "boolean" },
+        "contactsSummary": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "cnic", "phone", "street", "fullAddress", "bloodGroup", "shareMedicalOnSos", "contactsSummary", "createdAt", "updatedAt"]
+    },
+    "EmergencyIncident": {
+      "title": "EmergencyIncident",
+      "description": "Emergency SOS or distress incident triggered from the citizen app.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "citizenId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "citizenName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "citizenCnic": { "type": "string", "maxLength": 20 },
+        "citizenPhone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "citizenAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "bloodGroup": { "type": "string", "maxLength": 16 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "area": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "street": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "trigger": { "type": "string", "maxLength": 48 },
+        "status": { "type": "string", "enum": ["created", "acknowledged", "responder_assigned", "resolved", "false_alarm"] },
+        "priority": { "type": "string", "enum": ["critical", "high", "moderate", "low"] },
+        "agency": { "type": "string", "enum": ["police", "hospital", "fire", "multi"] },
+        "silentMode": { "type": "boolean" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "transcriptOrAudioNote": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "citizenId", "citizenName", "citizenPhone", "citizenAddress", "city", "area", "street", "trigger", "status", "priority", "agency", "silentMode", "lat", "lng", "createdAt", "updatedAt"]
+    },
+    "CommunitySafetyReport": {
+      "title": "CommunitySafetyReport",
+      "description": "Citizen-submitted hazard, assault, fire, or medical report.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "citizenId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": { "type": "string", "enum": ["assault", "household_violence", "harassment", "unsafe_lighting", "fire_hazard", "medical_emergency"] },
+        "city": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "area": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "street": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "fullAddress": { "type": "string", "maxLength": 300 },
+        "description": { "type": "string", "minLength": 4, "maxLength": 600 },
+        "anonymous": { "type": "boolean" },
+        "shareProfileWithTeam": { "type": "boolean" },
+        "moderationStatus": { "type": "string", "enum": ["pending_review", "verified_advisory", "escalated_police", "escalated_fire", "escalated_hospital", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "citizenId", "category", "city", "area", "street", "description", "anonymous", "shareProfileWithTeam", "moderationStatus", "createdAt", "updatedAt"]
+    },
+    "AdminAccount": {
+      "title": "AdminAccount",
+      "description": "Control room operator / admin membership document.",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "maxLength": 48 }
+      },
+      "required": ["role"]
+    }
+  },
+  "firestore": {
+    "/citizens/{citizenId}": {
+      "schema": { "$ref": "#/entities/CitizenPublic" },
+      "description": "Public/operational citizen header for owner and GuardAI control-room admins."
+    },
+    "/citizens/{citizenId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/CitizenPrivateInfo" },
+      "description": "Isolated PII subcollection (CNIC, phone, blood group, medical notes, full address) under /citizens/{citizenId}/private/pii."
+    },
+    "/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/EmergencyIncident" },
+      "description": "Emergency SOS incidents synced from citizen devices."
+    },
+    "/community_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/CommunitySafetyReport" },
+      "description": "Community safety and hazard reports."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminAccount" },
+      "description": "Authorized GuardAI working team operator UIDs."
+    }
+  }
+}

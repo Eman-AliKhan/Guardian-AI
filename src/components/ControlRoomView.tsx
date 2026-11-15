@@ -4,6 +4,8 @@ import {
   Building2,
   CheckCircle2,
   Clock,
+  CreditCard,
+  Droplets,
   FileAudio,
   Flame,
   HeartPulse,
@@ -15,6 +17,7 @@ import {
   ShieldAlert,
   Sparkles,
   UserCheck,
+  Users,
   XCircle,
 } from 'lucide-react';
 import { TacticalMap } from './TacticalMap';
@@ -85,9 +88,10 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
 }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'active' | 'police' | 'hospital' | 'fire'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [citizenSearch, setCitizenSearch] = useState('');
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [noteInput, setNoteInput] = useState('');
-  const [activeSubTab, setActiveSubTab] = useState<'dispatch' | 'community'>('dispatch');
+  const [activeSubTab, setActiveSubTab] = useState<'dispatch' | 'citizens' | 'community'>('dispatch');
 
   const filteredIncidents = useMemo(() => {
     return state.incidents.filter((inc) => {
@@ -117,6 +121,21 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
 
   const selectedIncident =
     state.incidents.find((i) => i.id === selectedIncidentId) || filteredIncidents[0] || null;
+
+  const filteredCitizens = useMemo(() => {
+    const q = citizenSearch.trim().toLowerCase();
+    return state.registeredCitizens.filter((c) => {
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.cnic.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        (c.bloodGroup || '').toLowerCase().includes(q) ||
+        c.city.toLowerCase().includes(q) ||
+        c.fullAddress.toLowerCase().includes(q)
+      );
+    });
+  }, [state.registeredCitizens, citizenSearch]);
 
   const activeCount = state.incidents.filter(
     (i) => i.status !== 'resolved' && i.status !== 'false_alarm'
@@ -192,9 +211,62 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
         </div>
       </div>
 
-      {/* Mode Switcher: Live Incident Dispatch vs Community Moderation */}
+      {/* Live Connected Customer Profile Banner (Shows immediately when customer enters info in /app) */}
+      {(state.citizenProfile.profileCompleted || state.registeredCitizens.length > 0) && (
+        <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-semibold text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1">
+                <UserCheck className="w-3.5 h-3.5" />
+                {state.citizenProfile.profileCompleted
+                  ? 'Active Customer Profile Synced Live'
+                  : 'Latest Registered Citizen'}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono text-slate-500">
+                CNIC: <strong className="text-slate-900 dark:text-white">{state.citizenProfile.cnic}</strong>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="font-semibold text-red-600 dark:text-red-400 inline-flex items-center gap-1">
+                <Droplets className="w-3.5 h-3.5" />
+                Blood Group: {state.citizenProfile.bloodGroup || 'Unknown'}
+              </span>
+            </div>
+            <div className="text-sm font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+              <span>{state.citizenProfile.name}</span>
+              <a
+                href={`tel:${state.citizenProfile.phone}`}
+                className="text-xs font-mono font-semibold text-blue-700 dark:text-blue-400 hover:underline"
+              >
+                {state.citizenProfile.phone}
+              </a>
+            </div>
+            <div className="text-xs text-slate-600 dark:text-slate-300">
+              {state.citizenProfile.fullAddress}
+              {(state.citizenProfile.allergies || state.citizenProfile.medicalConditions) && (
+                <>
+                  {' · '}
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    Medical: {[state.citizenProfile.allergies && `Allergies: ${state.citizenProfile.allergies}`, state.citizenProfile.medicalConditions].filter(Boolean).join(', ')}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('citizens')}
+            className="px-3.5 py-2 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Users className="w-3.5 h-3.5" />
+            View All Citizen Profiles ({state.registeredCitizens.length})
+          </button>
+        </div>
+      )}
+
+      {/* Mode Switcher: Live Incident Dispatch vs Registered Citizens vs Community Moderation */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-3">
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveSubTab('dispatch')}
@@ -205,6 +277,17 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
             }`}
           >
             Live Dispatch &amp; Map ({state.incidents.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('citizens')}
+            className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeSubTab === 'citizens'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+            }`}
+          >
+            Registered Citizens ({state.registeredCitizens.length})
           </button>
           <button
             type="button"
@@ -224,7 +307,124 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
         </div>
       </div>
 
-      {activeSubTab === 'community' ? (
+      {activeSubTab === 'citizens' ? (
+        <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Registered Citizens — CNIC, Blood Group &amp; Emergency Profiles
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Live registry of customers signed into the GuardAI Citizen App (/app). Updates appear instantaneously when a user adds or edits their information.
+              </p>
+            </div>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={citizenSearch}
+                onChange={(e) => setCitizenSearch(e.target.value)}
+                placeholder="Search CNIC, name, blood group, city..."
+                className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            {filteredCitizens.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-500">
+                No registered citizen profiles match your search.
+              </div>
+            ) : (
+              filteredCitizens.map((cit) => (
+                <div key={cit.id} className="p-5 space-y-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <span className="inline-flex items-center gap-1 font-mono font-semibold text-slate-900 dark:text-white">
+                          <CreditCard className="w-3.5 h-3.5 text-slate-400" />
+                          CNIC: {cit.cnic || 'Not provided'}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="inline-flex items-center gap-1 font-bold text-red-600 dark:text-red-400">
+                          <Droplets className="w-3.5 h-3.5" />
+                          Blood: {cit.bloodGroup || 'Unknown'}
+                        </span>
+                        {cit.gender && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{cit.gender}</span>
+                          </>
+                        )}
+                        {cit.dateOfBirth && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono">DOB: {cit.dateOfBirth}</span>
+                          </>
+                        )}
+                      </div>
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2.5">
+                        <span>{cit.name}</span>
+                        <a
+                          href={`tel:${cit.phone}`}
+                          className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-blue-700 dark:text-blue-400 hover:underline"
+                        >
+                          <PhoneCall className="w-3.5 h-3.5" />
+                          {cit.phone}
+                        </a>
+                      </h3>
+                      <div className="text-xs text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>
+                          {cit.fullAddress} ({cit.city} → {cit.area} → {cit.street})
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-right text-xs text-slate-500 dark:text-slate-400 shrink-0">
+                      <div className="font-medium text-emerald-700 dark:text-emerald-400">
+                        {cit.authMethod === 'google_firebase' ? 'Google Cloud Synced' : 'Mobile OTP Verified'}
+                      </div>
+                      <div className="font-mono text-[11px] mt-0.5">
+                        Updated {formatTime(cit.updatedAt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <div>
+                      <span className="text-slate-500">Allergies: </span>
+                      <span className="font-medium text-slate-900 dark:text-white">
+                        {cit.allergies || 'None reported'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Medical Conditions: </span>
+                      <span className="font-medium text-slate-900 dark:text-white">
+                        {cit.medicalConditions || 'None reported'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Emergency Contacts: </span>
+                      <span className="font-medium text-slate-900 dark:text-white">
+                        {cit.contacts.length > 0
+                          ? cit.contacts.map((c) => `${c.name} (${c.phone})`).join(' · ')
+                          : 'None'}
+                      </span>
+                    </div>
+                  </div>
+                  {cit.emergencyNotes && (
+                    <div className="text-xs text-slate-600 dark:text-slate-300">
+                      <span className="font-semibold">Emergency Note: </span>
+                      {cit.emergencyNotes}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : activeSubTab === 'community' ? (
         <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -250,15 +450,40 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
                       {rep.category.replace('_', ' ')}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span>{rep.city}</span>
+                    <span>{rep.city} → {rep.area} → {rep.street}</span>
                     <span aria-hidden="true">·</span>
                     <span>{rep.anonymous ? 'Anonymous' : 'Verified Citizen'}</span>
                     <span aria-hidden="true">·</span>
                     <span className="font-mono tabular-nums">{formatTime(rep.createdAt)}</span>
                   </div>
                   <div className="text-sm font-medium text-slate-900 dark:text-white">
-                    {rep.areaLabel}
+                    {rep.fullAddress || rep.areaLabel}
                   </div>
+                  {rep.shareProfileWithTeam && rep.reporterName && (
+                    <div className="text-xs text-slate-700 dark:text-slate-300 flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">Reporter: {rep.reporterName}</span>
+                      {rep.reporterCnic && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono">CNIC: {rep.reporterCnic}</span>
+                        </>
+                      )}
+                      {rep.reporterPhone && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <a href={`tel:${rep.reporterPhone}`} className="font-mono text-blue-700 dark:text-blue-400 hover:underline">
+                            {rep.reporterPhone}
+                          </a>
+                        </>
+                      )}
+                      {rep.reporterBloodGroup && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-semibold text-red-600 dark:text-red-400">Blood: {rep.reporterBloodGroup}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <p className="text-sm text-slate-600 dark:text-slate-300">{rep.description}</p>
                   <div className="text-xs text-slate-500 dark:text-slate-400">
                     Status:{' '}
@@ -444,8 +669,18 @@ export const ControlRoomView: React.FC<ControlRoomViewProps> = ({
                             : 'Live WebSocket'}
                       </span>
                     </div>
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2.5">
                       <span>{selectedIncident.citizenName}</span>
+                      {selectedIncident.citizenCnic && (
+                        <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-300">
+                          CNIC: {selectedIncident.citizenCnic}
+                        </span>
+                      )}
+                      {selectedIncident.citizenBloodGroup && (
+                        <span className="text-xs font-bold text-red-600 dark:text-red-400">
+                          Blood: {selectedIncident.citizenBloodGroup}
+                        </span>
+                      )}
                       <a
                         href={`tel:${selectedIncident.citizenPhone}`}
                         className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-blue-700 dark:text-blue-400 hover:underline"
