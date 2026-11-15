@@ -1,0 +1,6 @@
+{
+  "name": "Guardian AI",
+  "description": "AI-powered personal safety, emergency dispatch, and multi-agency control-room platform for Pakistan.",
+  "requestFramePermissions": ["microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
